@@ -8,7 +8,7 @@
 
 This is mcuboot, version 1.1.0
 
-MCUBoot is a secure bootloader for 32-bit MCUs.   The goal of MCUBoot is to
+MCUboot is a secure bootloader for 32-bit MCUs.   The goal of MCUboot is to
 define a common infrastructure for the bootloader, system flash layout on
 microcontroller systems, and to provide a secure bootloader that enables
 easy software upgrade.
@@ -18,6 +18,13 @@ hardware porting layers from the operating system it works with.  Currently
 mcuboot works with both the Apache Mynewt, and Zephyr operating systems, but
 more ports are planned in the future. RIOT is currently supported as a boot
 target with a complete port planned.
+
+## Using MCUboot
+
+Instructions for different operating systems can be found here:
+- [Zephyr](docs/readme-zephyr.md)
+- [Mynewt](docs/readme-mynewt.md)
+- [RIOT](docs/readme-riot.md)
 
 ## Roadmap
 

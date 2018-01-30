@@ -6,8 +6,7 @@
 
 cmake_minimum_required(VERSION 3.8.2)
 
-
-set(KCONFIG_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../Kconfig)
+set(KCONFIG_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/Kconfig)
 
 ########################
 # Configuration choices.
@@ -136,7 +135,7 @@ endif()
 
 # This is necessary to ensure mcuboot is linked into, and fits inside,
 # the boot partition.
-set(DTC_OVERLAY_FILE dts.overlay)
+set(DTC_OVERLAY_FILE ${CMAKE_CURRENT_LIST_DIR}/dts.overlay)
 
 # Enable Zephyr runner options which request mass erase if so
 # configured.
@@ -183,7 +182,7 @@ endif()
 target_include_directories(app PRIVATE include)
 target_include_directories(app PRIVATE targets)
 if(EXISTS "${APPLICATION_SOURCE_DIR}/targets/${BOARD}.h")
-  target_compile_definitions(app PRIVATE "-DMCUBOOT_TARGET_CONFIG='\"${BOARD}.h\"'")
+  target_compile_definitions(app PRIVATE "-DMCUBOOT_TARGET_CONFIG=\"${BOARD}.h\"")
 endif()
 
 # Zephyr port-specific sources.
