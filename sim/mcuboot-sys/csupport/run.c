@@ -1,5 +1,6 @@
 /* Run the boot image. */
 
+#include <assert.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +10,11 @@
 #include "flash_map/flash_map.h"
 
 #include "../../../boot/bootutil/src/bootutil_priv.h"
+#include "bootsim.h"
+
+#ifdef MCUBOOT_SIGN_EC256
+#include "../../../ext/tinycrypt/lib/include/tinycrypt/ecc_dsa.h"
+#endif
 
 #define BOOT_LOG_LEVEL BOOT_LOG_LEVEL_ERROR
 #include <bootutil/bootutil_log.h>
@@ -21,10 +27,27 @@ static jmp_buf boot_jmpbuf;
 int flash_counter;
 
 int jumped = 0;
+uint8_t c_asserts = 0;
+uint8_t c_catch_asserts = 0;
+
+int ecdsa256_sign_(const uint8_t *privkey, const uint8_t *hash,
+                   unsigned hash_len, uint8_t *signature)
+{
+#ifdef MCUBOOT_SIGN_EC256
+    return uECC_sign(privkey, hash, hash_len, signature, uECC_secp256r1());
+#else
+    (void)privkey;
+    (void)hash;
+    (void)hash_len;
+    (void)signature;
+    return 0;
+#endif
+}
 
 uint8_t sim_flash_align = 1;
 uint8_t flash_area_align(const struct flash_area *area)
 {
+    (void)area;
     return sim_flash_align;
 }
 
@@ -68,6 +91,7 @@ int invoke_boot_go(struct area_desc *adesc)
 int hal_flash_read(uint8_t flash_id, uint32_t address, void *dst,
                    uint32_t num_bytes)
 {
+    (void)flash_id;
     // printf("hal_flash_read: %d, 0x%08x (0x%x)\n",
     //        flash_id, address, num_bytes);
     return sim_flash_read(address, dst, num_bytes);
@@ -76,6 +100,7 @@ int hal_flash_read(uint8_t flash_id, uint32_t address, void *dst,
 int hal_flash_write(uint8_t flash_id, uint32_t address,
                     const void *src, int32_t num_bytes)
 {
+    (void)flash_id;
     // printf("hal_flash_write: 0x%08x (0x%x)\n", address, num_bytes);
     // fflush(stdout);
     if (--flash_counter == 0) {
@@ -88,6 +113,7 @@ int hal_flash_write(uint8_t flash_id, uint32_t address,
 int hal_flash_erase(uint8_t flash_id, uint32_t address,
                     uint32_t num_bytes)
 {
+    (void)flash_id;
     // printf("hal_flash_erase: 0x%08x, (0x%x)\n", address, num_bytes);
     // fflush(stdout);
     if (--flash_counter == 0) {
@@ -99,6 +125,7 @@ int hal_flash_erase(uint8_t flash_id, uint32_t address,
 
 uint8_t hal_flash_align(uint8_t flash_id)
 {
+    (void)flash_id;
     return sim_flash_align;
 }
 
@@ -115,7 +142,7 @@ int flash_area_id_from_image_slot(int slot)
 
 int flash_area_open(uint8_t id, const struct flash_area **area)
 {
-    int i;
+    uint32_t i;
 
     for (i = 0; i < flash_areas->num_slots; i++) {
         if (flash_areas->slots[i].id == id)
@@ -133,6 +160,7 @@ int flash_area_open(uint8_t id, const struct flash_area **area)
 
 void flash_area_close(const struct flash_area *area)
 {
+    (void)area;
 }
 
 /*
@@ -169,7 +197,7 @@ int flash_area_erase(const struct flash_area *area, uint32_t off, uint32_t len)
 
 int flash_area_to_sectors(int idx, int *cnt, struct flash_area *ret)
 {
-    int i;
+    uint32_t i;
     struct area *slot;
 
     for (i = 0; i < flash_areas->num_slots; i++) {
@@ -183,7 +211,7 @@ int flash_area_to_sectors(int idx, int *cnt, struct flash_area *ret)
 
     slot = &flash_areas->slots[i];
 
-    if (slot->num_areas > *cnt) {
+    if (slot->num_areas > (uint32_t)*cnt) {
         printf("Too many areas in slot\n");
         abort();
     }
@@ -197,7 +225,7 @@ int flash_area_to_sectors(int idx, int *cnt, struct flash_area *ret)
 int flash_area_get_sectors(int fa_id, uint32_t *count,
                            struct flash_sector *sectors)
 {
-    int i;
+    uint32_t i;
     struct area *slot;
 
     for (i = 0; i < flash_areas->num_slots; i++) {
@@ -224,4 +252,20 @@ int flash_area_get_sectors(int fa_id, uint32_t *count,
     *count = slot->num_areas;
 
     return 0;
+}
+
+void sim_assert(int x, const char *assertion, const char *file, unsigned int line, const char *function)
+{
+    if (!(x)) {
+        if (c_catch_asserts) {
+            c_asserts++;
+        } else {
+            BOOT_LOG_ERR("%s:%d: %s: Assertion `%s' failed.", file, line, function, assertion);
+
+            /* NOTE: if the assert below is triggered, the place where it was originally
+             * asserted is printed by the message above...
+             */
+            assert(x);
+        }
+    }
 }

@@ -43,6 +43,18 @@
 
 static struct boot_loader_state boot_data;
 
+#if defined(MCUBOOT_VALIDATE_SLOT0) && !defined(MCUBOOT_OVERWRITE_ONLY)
+static int boot_status_fails = 0;
+#define BOOT_STATUS_ASSERT(x)                \
+    do {                                     \
+        if (x) {                             \
+            boot_status_fails++;             \
+        }                                    \
+    } while (0)
+#else
+#define BOOT_STATUS_ASSERT(x) ASSERT(x)
+#endif
+
 struct boot_status_table {
     /**
      * For each field, a value of 0 means "any".
@@ -149,7 +161,7 @@ boot_status_source(void)
     struct boot_swap_state state_scratch;
     struct boot_swap_state state_slot0;
     int rc;
-    int i;
+    size_t i;
     uint8_t source;
 
     rc = boot_read_swap_state_by_id(FLASH_AREA_IMAGE_0, &state_slot0);
@@ -273,7 +285,7 @@ done:
 }
 
 static int
-boot_read_image_headers(void)
+boot_read_image_headers(bool require_all)
 {
     int rc;
     int i;
@@ -281,11 +293,13 @@ boot_read_image_headers(void)
     for (i = 0; i < BOOT_NUM_SLOTS; i++) {
         rc = boot_read_image_header(i, boot_img_hdr(&boot_data, i));
         if (rc != 0) {
-            /* If at least the first slot's header was read successfully, then
-             * the boot loader can attempt a boot.  Failure to read any headers
-             * is a fatal error.
+            /* If `require_all` is set, fail on any single fail, otherwise
+             * if at least the first slot's header was read successfully,
+             * then the boot loader can attempt a boot.
+             *
+             * Failure to read any headers is a fatal error.
              */
-            if (i > 0) {
+            if (i > 0 && !require_all) {
                 return 0;
             } else {
                 return rc;
@@ -386,6 +400,8 @@ boot_read_status_bytes(const struct flash_area *fap, struct boot_status *bs)
     uint8_t status;
     int max_entries;
     int found;
+    int found_idx;
+    int invalid;
     int rc;
     int i;
 
@@ -393,6 +409,8 @@ boot_read_status_bytes(const struct flash_area *fap, struct boot_status *bs)
     max_entries = boot_status_entries(fap);
 
     found = 0;
+    found_idx = 0;
+    invalid = 0;
     for (i = 0; i < max_entries; i++) {
         rc = flash_area_read(fap, off + i * BOOT_WRITE_SZ(&boot_data),
                              &status, 1);
@@ -401,18 +419,38 @@ boot_read_status_bytes(const struct flash_area *fap, struct boot_status *bs)
         }
 
         if (status == 0xff) {
-            if (found) {
-                break;
+            if (found && !found_idx) {
+                found_idx = i;
             }
         } else if (!found) {
             found = 1;
+        } else if (found_idx) {
+            invalid = 1;
+            break;
         }
     }
 
+    if (invalid) {
+        /* This means there was an error writing status on the last
+         * swap. Tell user and move on to validation!
+         */
+        BOOT_LOG_ERR("Detected inconsistent status!");
+
+#if !defined(MCUBOOT_VALIDATE_SLOT0)
+        /* With validation of slot0 disabled, there is no way to be sure the
+         * swapped slot0 is OK, so abort!
+         */
+        assert(0);
+#endif
+    }
+
     if (found) {
-        i--;
-        bs->idx = i / BOOT_STATUS_STATE_COUNT;
-        bs->state = i % BOOT_STATUS_STATE_COUNT;
+        if (!found_idx) {
+            found_idx = i;
+        }
+        found_idx--;
+        bs->idx = found_idx / BOOT_STATUS_STATE_COUNT;
+        bs->state = found_idx % BOOT_STATUS_STATE_COUNT;
     }
 
     return 0;
@@ -911,7 +949,7 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_status *bs)
 
         bs->state = 1;
         rc = boot_write_status(bs);
-        assert(rc == 0);
+        BOOT_STATUS_ASSERT(rc == 0);
     }
 
     if (bs->state == 1) {
@@ -932,7 +970,7 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_status *bs)
 
         bs->state = 2;
         rc = boot_write_status(bs);
-        assert(rc == 0);
+        BOOT_STATUS_ASSERT(rc == 0);
     }
 
     if (bs->state == 2) {
@@ -960,7 +998,7 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_status *bs)
                         scratch_trailer_off,
                         img_off + copy_sz,
                         BOOT_STATUS_STATE_COUNT * BOOT_WRITE_SZ(&boot_data));
-            assert(rc == 0);
+            BOOT_STATUS_ASSERT(rc == 0);
 
             rc = boot_read_swap_state_by_id(FLASH_AREA_IMAGE_SCRATCH,
                                             &swap_state);
@@ -984,7 +1022,7 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_status *bs)
         bs->state = 0;
         bs->use_scratch = 0;
         rc = boot_write_status(bs);
-        assert(rc == 0);
+        BOOT_STATUS_ASSERT(rc == 0);
     }
 }
 #endif /* !MCUBOOT_OVERWRITE_ONLY */
@@ -1011,6 +1049,8 @@ boot_copy_image(struct boot_status *bs)
     size_t size;
     size_t this_size;
     size_t last_sector;
+
+    (void)bs;
 
 #if defined(MCUBOOT_OVERWRITE_ONLY_FAST)
     uint32_t src_size = 0;
@@ -1068,7 +1108,7 @@ boot_copy_image(struct boot_status *bs)
     uint32_t sz;
     int first_sector_idx;
     int last_sector_idx;
-    int swap_idx;
+    uint32_t swap_idx;
     struct image_header *hdr;
     uint32_t size;
     uint32_t copy_size;
@@ -1131,6 +1171,12 @@ boot_copy_image(struct boot_status *bs)
         last_sector_idx = first_sector_idx - 1;
         swap_idx++;
     }
+
+#ifdef MCUBOOT_VALIDATE_SLOT0
+    if (boot_status_fails > 0) {
+        BOOT_LOG_WRN("%d status write fails performing the swap", boot_status_fails);
+    }
+#endif
 
     return 0;
 }
@@ -1294,7 +1340,7 @@ boot_go(struct boot_rsp *rsp)
     }
 
     /* Attempt to read an image header from each slot. */
-    rc = boot_read_image_headers();
+    rc = boot_read_image_headers(false);
     if (rc != 0) {
         goto out;
     }
@@ -1365,7 +1411,7 @@ boot_go(struct boot_rsp *rsp)
     }
 
     if (reload_headers) {
-        rc = boot_read_image_headers();
+        rc = boot_read_image_headers(false);
         if (rc != 0) {
             goto out;
         }
@@ -1379,7 +1425,7 @@ boot_go(struct boot_rsp *rsp)
 
 #ifdef MCUBOOT_VALIDATE_SLOT0
     rc = boot_validate_slot(0);
-    assert(rc == 0);
+    ASSERT(rc == 0);
     if (rc != 0) {
         rc = BOOT_EBADIMAGE;
         goto out;
@@ -1441,7 +1487,7 @@ split_go(int loader_slot, int split_slot, void **entry)
         goto done;
     }
 
-    rc = boot_read_image_headers();
+    rc = boot_read_image_headers(true);
     if (rc != 0) {
         goto done;
     }

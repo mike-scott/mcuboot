@@ -29,9 +29,10 @@
 #ifndef MBEDTLS_CONFIG_BOOT_H
 #define MBEDTLS_CONFIG_BOOT_H
 
-/* TODO: Configure this between app and target.  Really, we want the
- * config to come from the app. */
-#define CONFIG_BOOT_VERIFY_RSA_SIGNATURE
+#ifdef CONFIG_MCUBOOT_SERIAL
+/* Mcuboot uses mbedts-base64 for serial protocol encoding. */
+#define MBEDTLS_BASE64_C
+#endif
 
 /* System support */
 #define MBEDTLS_PLATFORM_C
@@ -56,7 +57,7 @@
 #endif
 
 /* mbed TLS feature support */
-#ifdef CONFIG_BOOT_VERIFY_ECDSA_SIGNATURE
+#ifdef MCUBOOT_SIGN_EC
 #define MBEDTLS_ECP_DP_SECP256R1_ENABLED
 #define MBEDTLS_ECP_DP_SECP224R1_ENABLED
 #define MBEDTLS_ECP_NIST_OPTIM
@@ -65,7 +66,7 @@
 #define MBEDTLS_ECP_C
 #endif
 
-#ifdef CONFIG_BOOT_VERIFY_RSA_SIGNATURE
+#ifdef MCUBOOT_SIGN_RSA
 #define MBEDTLS_RSA_C
 #define MBEDTLS_PKCS1_V15
 #endif
@@ -79,7 +80,7 @@
 #define MBEDTLS_SHA256_C
 
 /* Save RAM by adjusting to our exact needs */
-#ifdef CONFIG_BOOT_VERIFY_RSA_SIGNATURE
+#ifdef MCUBOOT_SIGN_RSA
 #define MBEDTLS_ECP_MAX_BITS             2048
 #define MBEDTLS_MPI_MAX_SIZE              256
 #else

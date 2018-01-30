@@ -1,12 +1,16 @@
 # Travis configuration.  Build the simulator and run its tests.
 
 language: rust
+
 script:
   - set -e
+  - if [[ "$TRAVIS_PULL_REQUEST" != "false" ]]; then ./scripts/check-signed-off-by.sh; fi
   - cd sim
   - cargo test
   - cargo test --features sig-rsa
+  - cargo test --features sig-ecdsa
   - cargo test --features overwrite-only
+  - cargo test --features validate-slot0
 
 notifications:
   slack:
