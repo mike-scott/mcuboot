@@ -35,6 +35,7 @@
 #include <crc16.h>
 #include <serial_adapter/serial_adapter.h>
 #include <base64.h>
+#include <cbor.h>
 #else
 #include <bsp/bsp.h>
 #include <hal/hal_system.h>
@@ -43,10 +44,10 @@
 #include <console/console.h>
 #include <crc/crc16.h>
 #include <base64/base64.h>
-#endif /* __ZEPHYR__ */
-
 #include <tinycbor/cbor.h>
 #include <tinycbor/cbor_buf_reader.h>
+#endif /* __ZEPHYR__ */
+
 #include <cborattr/cborattr.h>
 
 #include <flash_map/flash_map.h>
@@ -117,7 +118,7 @@ bs_find_val(char *buf, char *name)
     ptr += strlen(name);
 
     while (*ptr != '\0') {
-        if (*ptr != ':' && !isspace(*ptr)) {
+        if (*ptr != ':' && !isspace((int)*ptr)) {
             break;
         }
         ++ptr;
@@ -216,7 +217,11 @@ bs_upload(char *buf, int len)
 
     memset(img_data, 0, sizeof(img_data));
     cbor_buf_reader_init(&reader, (uint8_t *)buf, len);
+#ifdef __ZEPHYR__
+    cbor_parser_cust_reader_init(&reader.r, 0, &parser, &value);
+#else
     cbor_parser_init(&reader.r, 0, &parser, &value);
+#endif
     rc = cbor_read_object(&value, attr);
     if (rc || off == UINT_MAX) {
         rc = MGMT_ERR_EINVAL;
@@ -287,7 +292,7 @@ bs_echo_ctl(char *buf, int len)
  * Reset, and (presumably) boot to newly uploaded image. Flush console
  * before restarting.
  */
-static int
+static void
 bs_reset(char *buf, int len)
 {
     cbor_encoder_create_map(&bs_root, &bs_rsp, CborIndefiniteLength);
@@ -326,7 +331,11 @@ boot_serial_input(char *buf, int len)
     buf += sizeof(*hdr);
     len -= sizeof(*hdr);
     bs_writer.bytes_written = 0;
+#ifdef __ZEPHYR__
+    cbor_encoder_cust_writer_init(&bs_root, &bs_writer, 0);
+#else
     cbor_encoder_init(&bs_root, &bs_writer, 0);
+#endif
 
     /*
      * Limited support for commands.

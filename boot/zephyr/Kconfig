@@ -34,12 +34,18 @@ menuconfig MCUBOOT_SERIAL
 	select UART_INTERRUPT_DRIVEN
 	select SERIAL
 	select BASE64
-	select NEWLIB_LIBC
+	select TINYCBOR
 	help
 	  Enable serial recovery feature in mcuboot.
 
+config BOOT_MAX_IMG_SECTORS
+	int "max number of sectors per image slot"
+	default 128
+	help
+	  Maximum number of sectors that a swap upgrade can handle
+
 config BOOT_MAX_LINE_INPUT_LEN
-	int "cmd line max length" 
+	int "cmd line max length"
 	default 512
 	depends on MCUBOOT_SERIAL
 	help
@@ -48,7 +54,7 @@ config BOOT_MAX_LINE_INPUT_LEN
 config BOOT_SERIAL_DETECT_PORT
 	string
 	prompt "GPIO Port to trigger serial recovery mode"
-	default GPIO_0 if SOC_FAMILY_NRF5
+	default GPIO_0 if SOC_FAMILY_NRF
 	depends on MCUBOOT_SERIAL
 	help
 	  Serial recovery detect port

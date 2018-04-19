@@ -57,7 +57,10 @@ After building the bootloader, the binaries should reside in
 `build/zephyr/zephyr.{bin,hex,elf}`, where `build` is the build
 directory you chose when running `cmake`. Use the Zephyr build
 system `flash` target to flash these binaries, usually by running
-`make flash` (or `ninja flash`, etc.) from the build directory.
+`make flash` (or `ninja flash`, etc.) from the build directory. Depending
+on the target and flash tool used, this might erase the whole of the flash
+memory (mass erase) or only the sectors where the boot loader resides prior to
+programming the bootloader image itself.
 
 ## Building Applications for the bootloader
 
@@ -90,14 +93,21 @@ keys.  It is important to stress that these should never be used for
 production, since the private key is publicly available in this
 repository.  See below on how to make your own signatures.
 
-There is a `sign.sh` script that gives some examples of how to make
-these signatures.
+Images can be signed with the `scripts/imgtool.py` script.  It is best
+to look at `samples/zephyr/Makefile` for examples on how to use this.
 
 ### Flashing the application
 
 The application itself can flashed with regular flash tools, but will
-need to be loaded at the offset of SLOT-0 for this particular target.
-These images can also be marked for upgrade, and loaded into SLOT-1,
+need to be programmed at the offset of slot-0 for this particular target.
+Depending on the platform and flash tool you might need to manually specify a
+flash offset corresponding to the slot-0 starting address. This is usually
+not relevant for flash tools that use Intel Hex images (.hex) instead of raw
+binary images (.bin) since the former include destination address information.
+Additionally you will need to make sure that the flash tool does not perform
+a mass erase (erasing the whole of the flash) or else you would be deleting
+MCUboot.
+These images can also be marked for upgrade, and loaded into slot-1,
 at which point the bootloader should perform an upgrade.  It is up to
 the image to mark slot-0 as "image ok" before the next reboot,
 otherwise the bootloader will revert the application.
@@ -106,11 +116,9 @@ otherwise the bootloader will revert the application.
 
 The signing keys used by MCUboot are represented in standard formats,
 and can be generated and processed using conventional tools.  However,
-the Mynewt project has developed some tools to make this easier, and
-the `imgtool` directory contains a small program to use these tools,
-as well as some additional tools for generating and extracting public
-keys.  If you will be using your own keys, it is recommended to build
-this tool following the directions within the directory.
+`scripts/imgtool.py` is able to generate key pairs in all of the
+supported formats.  See [the docs](imgtool.md) for more details on
+this tool.
 
 ### Generating a new keypair
 
@@ -118,11 +126,11 @@ Generating a keypair with imgtool is a matter of running the keygen
 subcommand:
 
 ```
-    $ imgtool keygen -k mykey.pem -t rsa-2048
+    $ ./scripts/imgtool.py keygen -k mykey.pem -t rsa-2048
 ```
 
 The argument to `-t` should be the desired key type.  See the
-imgtool README.rst for more details on the possible key types.
+[the docs](imgtool.md) for more details on the possible key types.
 
 ### Extracting the public key
 
@@ -132,7 +140,7 @@ bootloader.  The keys live in `boot/zephyr/keys.c`, and can be
 extracted using imgtool:
 
 ```
-    $ imgtool getpub -k mykey.pem
+    $ ./scripts/imgtool.py getpub -k mykey.pem
 ```
 
 This will output the public key as a C array that can be dropped
