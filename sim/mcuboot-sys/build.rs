@@ -17,6 +17,8 @@ fn main() {
     let mut conf = gcc::Build::new();
     conf.define("__BOOTSIM__", None);
     conf.define("MCUBOOT_USE_FLASH_AREA_GET_SECTORS", None);
+    conf.define("MCUBOOT_HAVE_ASSERT_H", None);
+    conf.define("MCUBOOT_MAX_IMG_SECTORS", Some("128"));
 
     if validate_slot0 {
         conf.define("MCUBOOT_VALIDATE_SLOT0", None);
@@ -31,7 +33,7 @@ fn main() {
         conf.define("MCUBOOT_SIGN_RSA", None);
         conf.define("MCUBOOT_USE_MBED_TLS", None);
 
-        conf.define("MBEDTLS_CONFIG_FILE", Some("<config-boot.h>"));
+        conf.define("MBEDTLS_CONFIG_FILE", Some("<config-rsa.h>"));
         conf.include("mbedtls/include");
         conf.file("mbedtls/library/sha256.c");
         conf.file("../../boot/zephyr/keys.c");
@@ -43,7 +45,7 @@ fn main() {
         conf.define("MCUBOOT_SIGN_EC256", None);
         conf.define("MCUBOOT_USE_TINYCRYPT", None);
 
-        conf.define("MBEDTLS_CONFIG_FILE", Some("<config-boot.h>"));
+        conf.define("MBEDTLS_CONFIG_FILE", Some("<config-asn1.h>"));
         conf.include("../../ext/mbedtls/include");
         conf.include("../../ext/tinycrypt/lib/include");
 
@@ -57,9 +59,9 @@ fn main() {
 
         conf.file("../../ext/mbedtls/src/asn1parse.c");
     } else {
-        // Neither signature type, only verify sha256.
+        // Neither signature type, only verify sha256. The default
+        // configuration file bundled with mbedTLS is sufficient.
         conf.define("MCUBOOT_USE_MBED_TLS", None);
-        conf.define("MBEDTLS_CONFIG_FILE", Some("<config-boot.h>"));
         conf.include("mbedtls/include");
         conf.file("mbedtls/library/sha256.c");
     }

@@ -23,13 +23,14 @@
 #include "sysflash/sysflash.h"
 #include "flash_map/flash_map.h"
 #include "bootutil/image.h"
+#include "mcuboot_config/mcuboot_config.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#ifdef __BOOTSIM__
-#include "bootsim.h"
+#ifdef MCUBOOT_HAVE_ASSERT_H
+#include "mcuboot_config/mcuboot_assert.h"
 #else
 #define ASSERT assert
 #endif
@@ -90,15 +91,7 @@ struct boot_swap_state {
     uint8_t image_ok;
 };
 
-#if defined(__BOOTSIM__)
-#define BOOT_MAX_IMG_SECTORS       128
-#elif defined(__ZEPHYR__)
-#define BOOT_MAX_IMG_SECTORS       CONFIG_BOOT_MAX_IMG_SECTORS
-#elif defined(MCUBOOT_MYNEWT)
-#define BOOT_MAX_IMG_SECTORS       MYNEWT_VAL(BOOTUTIL_MAX_IMG_SECTORS)
-#else
-#error "Invalid target OS"
-#endif
+#define BOOT_MAX_IMG_SECTORS       MCUBOOT_MAX_IMG_SECTORS
 
 /*
  * The current flashmap API does not check the amount of space allocated when
