@@ -78,8 +78,7 @@ endif()
 
 # Zephyr port-specific sources.
 target_sources(app PRIVATE main.c)
-target_sources(app PRIVATE flash_map.c)
-target_sources(app PRIVATE hal_flash.c)
+target_sources(app PRIVATE flash_map_extended.c)
 target_sources(app PRIVATE os.c)
 target_sources(app PRIVATE keys.c)
 if(NOT DEFINED CONFIG_FLASH_PAGE_LAYOUT)
@@ -106,8 +105,20 @@ if(CONFIG_BOOT_SIGNATURE_TYPE_ECDSA_P256)
   target_sources(app PRIVATE "${TINYCRYPT_DIR}/source/sha256.c")
   target_sources(app PRIVATE "${TINYCRYPT_DIR}/source/utils.c")
 
+  # When building for ECDSA, we use our own copy of mbedTLS, so the Zephyr
+  # one must not be enabled or the MBEDTLS_CONFIG_FILE macros will collide.
+  if(DEFINED CONFIG_MBEDTLS)
+	  message(FATAL_ERROR "\
+
+CONFIG_MBEDTLS should not be enabled. \
+Try adding CONFIG_BOOT_SIGNATURE_TYPE_ECDSA_P256=y to your prj.conf, \
+delete the build folder and build from scratch.")
+  endif()
+  # Since here we are not using Zephyr's mbedTLS but rather our own, we need
+  # to set MBEDTLS_CONFIG_FILE ourselves. When using Zephyr's copy, this
+  # variable is set by its Kconfig in the Zephyr codebase.
+  target_compile_definitions(app PRIVATE MBEDTLS_CONFIG_FILE="${CMAKE_CURRENT_LIST_DIR}/include/mcuboot-mbedtls-cfg.h")
   # Additionally pull in just the ASN.1 parser from mbedTLS.
-  target_compile_definitions(app PRIVATE MBEDTLS_CFG_FILE=config-asn1.h)
   target_sources(app PRIVATE "${MBEDTLS_ASN1_DIR}/src/asn1parse.c")
 elseif(CONFIG_BOOT_SIGNATURE_TYPE_RSA)
   # Use mbedTLS provided by Zephyr for RSA signatures. (Its config file
@@ -120,4 +131,25 @@ if (CONFIG_MCUBOOT_SERIAL)
 zephyr_sources(${BOOT_DIR}/zephyr/serial_adapter.c)
 
 add_subdirectory(${BOOT_DIR}/boot_serial ./boot/boot_serial)
+endif()
+
+if(NOT CONFIG_BOOT_SIGNATURE_KEY_FILE STREQUAL "")
+  if(IS_ABSOLUTE ${CONFIG_BOOT_SIGNATURE_KEY_FILE})
+    set(KEY_FILE ${CONFIG_BOOT_SIGNATURE_KEY_FILE})
+  else()
+    set(KEY_FILE ${MCUBOOT_DIR}/${CONFIG_BOOT_SIGNATURE_KEY_FILE})
+  endif()
+  set(GENERATED_PUBKEY ${ZEPHYR_BINARY_DIR}/autogen-pubkey.c)
+  add_custom_command(
+    OUTPUT ${GENERATED_PUBKEY}
+    COMMAND
+    ${PYTHON_EXECUTABLE}
+    ${MCUBOOT_DIR}/scripts/imgtool.py
+    getpub
+    -k
+    ${KEY_FILE}
+    > ${GENERATED_PUBKEY}
+    DEPENDS ${KEY_FILE}
+    )
+  target_sources(app PRIVATE "${GENERATED_PUBKEY}")
 endif()

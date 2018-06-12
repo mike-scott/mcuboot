@@ -36,7 +36,7 @@ fn main() {
         conf.define("MBEDTLS_CONFIG_FILE", Some("<config-rsa.h>"));
         conf.include("mbedtls/include");
         conf.file("mbedtls/library/sha256.c");
-        conf.file("../../boot/zephyr/keys.c");
+        conf.file("csupport/keys.c");
 
         conf.file("mbedtls/library/rsa.c");
         conf.file("mbedtls/library/bignum.c");
@@ -49,7 +49,7 @@ fn main() {
         conf.include("../../ext/mbedtls/include");
         conf.include("../../ext/tinycrypt/lib/include");
 
-        conf.file("../../boot/zephyr/keys.c");
+        conf.file("csupport/keys.c");
 
         conf.file("../../ext/tinycrypt/lib/source/utils.c");
         conf.file("../../ext/tinycrypt/lib/source/sha256.c");
@@ -82,8 +82,8 @@ fn main() {
     conf.file("../../boot/bootutil/src/bootutil_misc.c");
     conf.file("csupport/run.c");
     conf.include("../../boot/bootutil/include");
-    conf.include("../../boot/zephyr/include");
     conf.include("csupport");
+    conf.include("../../boot/zephyr/include");
     conf.debug(true);
     conf.flag("-Wall");
     conf.flag("-Werror");

@@ -24,7 +24,7 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include "syscfg/syscfg.h"
-#include <flash_map/flash_map.h>
+#include <flash_map_backend/flash_map_backend.h>
 #include <os/os.h>
 #include <bsp/bsp.h>
 #include <hal/hal_bsp.h>
@@ -38,6 +38,7 @@
 #include <console/console.h>
 #include "bootutil/image.h"
 #include "bootutil/bootutil.h"
+#include "bootutil/bootutil_log.h"
 
 #define BOOT_AREA_DESC_MAX    (256)
 #define AREA_DESC_MAX         (BOOT_AREA_DESC_MAX)
@@ -67,10 +68,14 @@ main(void)
 
     hal_bsp_init();
 
+#if defined(MCUBOOT_SERIAL) || defined(MCUBOOT_HAVE_LOGGING)
     /* initialize uart without os */
     os_dev_initialize_all(OS_DEV_INIT_PRIMARY);
     sysinit();
     console_blocking_mode();
+#else
+    flash_map_init();
+#endif
 
 #ifdef MCUBOOT_SERIAL
     /*

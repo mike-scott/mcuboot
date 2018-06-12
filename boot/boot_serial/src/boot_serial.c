@@ -24,7 +24,6 @@
 
 #include "sysflash/sysflash.h"
 
-#define BOOT_LOG_LEVEL BOOT_LOG_LEVEL_INFO
 #include "bootutil/bootutil_log.h"
 
 #ifdef __ZEPHYR__
@@ -49,8 +48,7 @@
 #endif /* __ZEPHYR__ */
 
 #include <cborattr/cborattr.h>
-
-#include <flash_map/flash_map.h>
+#include <flash_map_backend/flash_map_backend.h>
 #include <hal/hal_flash.h>
 #include <os/os.h>
 #include <os/os_malloc.h>
