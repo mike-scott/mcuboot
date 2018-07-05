@@ -20,6 +20,7 @@
 #include <misc/__assert.h>
 #include <flash.h>
 #include <drivers/system_timer.h>
+#include <soc.h>
 
 #include "target.h"
 
@@ -29,7 +30,13 @@
 #include "flash_map_backend/flash_map_backend.h"
 
 #ifdef CONFIG_MCUBOOT_SERIAL
-#include <boot_serial/boot_serial.h>
+#include "boot_serial/boot_serial.h"
+#include "serial_adapter/serial_adapter.h"
+
+const struct boot_uart_funcs boot_funcs = {
+    .read = console_read,
+    .write = console_write
+};
 #endif
 
 struct device *boot_flash_device;
@@ -113,15 +120,17 @@ void main(void)
 
     rc = gpio_pin_configure(detect_port, CONFIG_BOOT_SERIAL_DETECT_PIN,
                             GPIO_DIR_IN | GPIO_PUD_PULL_UP);
-    __ASSERT(rc, "Error of boot detect pin initialization.\n");
+    __ASSERT(rc == 0, "Error of boot detect pin initialization.\n");
 
     rc = gpio_pin_read(detect_port, CONFIG_BOOT_SERIAL_DETECT_PIN, 
                        &detect_value);
-    __ASSERT(rc, "Error of the reading the detect pin.\n");
+    __ASSERT(rc == 0, "Error of the reading the detect pin.\n");
 
     if (detect_value == CONFIG_BOOT_SERIAL_DETECT_PIN_VAL) {
         BOOT_LOG_INF("Enter the serial recovery mode");
-        boot_serial_start(CONFIG_BOOT_MAX_LINE_INPUT_LEN + 1);
+        rc = boot_console_init();
+        __ASSERT(rc == 0, "Error initializing boot console.\n");
+        boot_serial_start(&boot_funcs);
         __ASSERT(0, "Bootloader serial process was terminated unexpectedly.\n");
     }
 #endif

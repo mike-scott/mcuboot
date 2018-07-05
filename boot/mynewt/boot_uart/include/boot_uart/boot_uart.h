@@ -16,22 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-#include "boot_test.h"
 
-TEST_CASE(boot_serial_empty_msg)
-{
-    char buf[4];
-    struct nmgr_hdr hdr;
+#ifndef _BOOT_UART_H_
+#define _BOOT_UART_H_
 
-    tx_msg(buf, 0);
+int boot_uart_open(void);
+void boot_uart_close(void);
+int boot_uart_read(char *str, int cnt, int *newline);
+void boot_uart_write(const char *ptr, int cnt);
 
-    strcpy(buf, "--");
-    tx_msg(buf, 2);
-
-    memset(&hdr, 0, sizeof(hdr));
-    tx_msg(&hdr, sizeof(hdr));
-
-    hdr.nh_op = NMGR_OP_WRITE;
-
-    tx_msg(&hdr, sizeof(hdr));
-}
+#endif /* _BOOT_UART_H_ */
