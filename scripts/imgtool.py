@@ -114,6 +114,10 @@ class BasedIntParamType(click.ParamType):
 
 @click.argument('outfile')
 @click.argument('infile')
+@click.option('-E', '--encrypt', metavar='filename',
+              help='Encrypt image using the provided public key')
+@click.option('-e', '--endian', type=click.Choice(['little', 'big']),
+              default='little', help="Select little or big endian")
 @click.option('--overwrite-only', default=False, is_flag=True,
               help='Use overwrite-only instead of swap upgrades')
 @click.option('-M', '--max-sectors', type=int,
@@ -131,14 +135,22 @@ class BasedIntParamType(click.ParamType):
 @click.option('-k', '--key', metavar='filename')
 @click.command(help='Create a signed or unsigned image')
 def sign(key, align, version, header_size, pad_header, slot_size, pad,
-         max_sectors, overwrite_only, infile, outfile):
+         max_sectors, overwrite_only, endian, encrypt, infile, outfile):
     img = image.Image.load(infile, version=decode_version(version),
                            header_size=header_size, pad_header=pad_header,
                            pad=pad, align=int(align), slot_size=slot_size,
                            max_sectors=max_sectors,
-                           overwrite_only=overwrite_only)
+                           overwrite_only=overwrite_only,
+                           endian=endian)
     key = load_key(key) if key else None
-    img.sign(key)
+    enckey = load_key(encrypt) if encrypt else None
+    if enckey:
+        if not isinstance(enckey, (keys.RSA2048, keys.RSA2048Public)):
+            raise Exception("Encryption only available with RSA")
+        if key and not isinstance(key, (keys.RSA2048, keys.RSA2048Public)):
+            raise Exception("Encryption with sign only available with RSA")
+    if key or enckey:
+        img.create(key, enckey)
 
     if pad:
         img.pad_to(slot_size)

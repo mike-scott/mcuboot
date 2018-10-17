@@ -22,6 +22,10 @@ from intelhex import IntelHex
 import hashlib
 import struct
 import os.path
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
 
 IMAGE_MAGIC = 0x96f3b83d
 IMAGE_HEADER_SIZE = 32
@@ -32,14 +36,19 @@ DEFAULT_MAX_SECTORS = 128
 # Image header flags.
 IMAGE_F = {
         'PIC':                   0x0000001,
-        'NON_BOOTABLE':          0x0000010, }
+        'NON_BOOTABLE':          0x0000010,
+        'ENCRYPTED':             0x0000004,
+}
 
 TLV_VALUES = {
         'KEYHASH': 0x01,
         'SHA256': 0x10,
         'RSA2048': 0x20,
         'ECDSA224': 0x21,
-        'ECDSA256': 0x22, }
+        'ECDSA256': 0x22,
+        'ENCRSA2048': 0x30,
+        'ENCKW128': 0x31,
+}
 
 TLV_INFO_SIZE = 4
 TLV_INFO_MAGIC = 0x6907
@@ -50,18 +59,26 @@ boot_magic = bytes([
     0x35, 0x52, 0x50, 0x0f,
     0x2c, 0xb6, 0x79, 0x80, ])
 
+STRUCT_ENDIAN_DICT = {
+        'little': '<',
+        'big':    '>'
+}
+
 class TLV():
-    def __init__(self):
+    def __init__(self, endian):
         self.buf = bytearray()
+        self.endian = endian
 
     def add(self, kind, payload):
         """Add a TLV record.  Kind should be a string found in TLV_VALUES above."""
-        buf = struct.pack('<BBH', TLV_VALUES[kind], 0, len(payload))
+        e = STRUCT_ENDIAN_DICT[self.endian]
+        buf = struct.pack(e + 'BBH', TLV_VALUES[kind], 0, len(payload))
         self.buf += buf
         self.buf += payload
 
     def get(self):
-        header = struct.pack('<HH', TLV_INFO_MAGIC, TLV_INFO_SIZE + len(self.buf))
+        e = STRUCT_ENDIAN_DICT[self.endian]
+        header = struct.pack(e + 'HH', TLV_INFO_MAGIC, TLV_INFO_SIZE + len(self.buf))
         return header + bytes(self.buf)
 
 class Image():
@@ -89,7 +106,7 @@ class Image():
 
     def __init__(self, version=None, header_size=IMAGE_HEADER_SIZE, pad=0,
                  align=1, slot_size=0, max_sectors=DEFAULT_MAX_SECTORS,
-                 overwrite_only=False):
+                 overwrite_only=False, endian="little"):
         self.version = version or versmod.decode_version("0")
         self.header_size = header_size or IMAGE_HEADER_SIZE
         self.pad = pad
@@ -97,11 +114,12 @@ class Image():
         self.slot_size = slot_size
         self.max_sectors = max_sectors
         self.overwrite_only = overwrite_only
+        self.endian = endian
 
     def __repr__(self):
         return "<Image version={}, header_size={}, base_addr={}, \
                 align={}, slot_size={}, max_sectors={}, overwrite_only={}, \
-                format={}, payloadlen=0x{:x}>".format(
+                endian={} format={}, payloadlen=0x{:x}>".format(
                     self.version,
                     self.header_size,
                     self.base_addr if self.base_addr is not None else "N/A",
@@ -109,6 +127,7 @@ class Image():
                     self.slot_size,
                     self.max_sectors,
                     self.overwrite_only,
+                    self.endian,
                     self.__class__.__name__,
                     len(self.payload))
 
@@ -128,10 +147,10 @@ class Image():
                         len(self.payload), tsize, self.slot_size)
                 raise Exception(msg)
 
-    def sign(self, key):
-        self.add_header(key)
+    def create(self, key, enckey):
+        self.add_header(key, enckey)
 
-        tlv = TLV()
+        tlv = TLV(self.endian)
 
         # Note that ecdsa wants to do the hashing itself, which means
         # we get to hash it twice.
@@ -151,17 +170,37 @@ class Image():
             sig = key.sign(bytes(self.payload))
             tlv.add(key.sig_tlv(), sig)
 
+        if enckey is not None:
+            plainkey = os.urandom(16)
+            cipherkey = enckey._get_public().encrypt(
+                plainkey, padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None))
+            tlv.add('ENCRSA2048', cipherkey)
+
+            nonce = bytes([0] * 16)
+            cipher = Cipher(algorithms.AES(plainkey), modes.CTR(nonce),
+                            backend=default_backend())
+            encryptor = cipher.encryptor()
+            img = bytes(self.payload[self.header_size:])
+            self.payload[self.header_size:] = encryptor.update(img) + \
+                                              encryptor.finalize()
+
         self.payload += tlv.get()
 
-    def add_header(self, key):
+    def add_header(self, key, enckey):
         """Install the image header.
 
         The key is needed to know the type of signature, and
         approximate the size of the signature."""
 
         flags = 0
+        if enckey is not None:
+            flags |= IMAGE_F['ENCRYPTED']
 
-        fmt = ('<' +
+        e = STRUCT_ENDIAN_DICT[self.endian]
+        fmt = (e +
             # type ImageHdr struct {
             'I' +   # Magic uint32
             'I' +   # LoadAddr uint32
