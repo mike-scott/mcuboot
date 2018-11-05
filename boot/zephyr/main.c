@@ -20,6 +20,7 @@
 #include <misc/__assert.h>
 #include <flash.h>
 #include <drivers/system_timer.h>
+#include <usb/usb_device.h>
 #include <soc.h>
 
 #include "target.h"
@@ -47,6 +48,8 @@ struct arm_vector_table {
     uint32_t reset;
 };
 
+extern void sys_clock_disable(void);
+
 static void do_boot(struct boot_rsp *rsp)
 {
     struct arm_vector_table *vt;
@@ -66,6 +69,10 @@ static void do_boot(struct boot_rsp *rsp)
                                      rsp->br_hdr->ih_hdr_size);
     irq_lock();
     sys_clock_disable();
+#ifdef CONFIG_BOOT_SERIAL_CDC_ACM
+    /* Disable the USB to prevent it from firing interrupts */
+    usb_disable();
+#endif
     __set_MSP(vt->msp);
     ((void (*)(void))vt->reset)();
 }
@@ -119,7 +126,7 @@ void main(void)
                             GPIO_DIR_IN | GPIO_PUD_PULL_UP);
     __ASSERT(rc == 0, "Error of boot detect pin initialization.\n");
 
-    rc = gpio_pin_read(detect_port, CONFIG_BOOT_SERIAL_DETECT_PIN, 
+    rc = gpio_pin_read(detect_port, CONFIG_BOOT_SERIAL_DETECT_PIN,
                        &detect_value);
     __ASSERT(rc == 0, "Error of the reading the detect pin.\n");
 
