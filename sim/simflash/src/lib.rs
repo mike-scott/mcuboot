@@ -14,6 +14,7 @@ use std::io::Write;
 use std::iter::Enumerate;
 use std::path::Path;
 use std::slice;
+use std::collections::HashMap;
 use pdump::HexDump;
 
 error_chain! {
@@ -33,6 +34,11 @@ error_chain! {
     }
 }
 
+pub struct FlashPtr {
+   pub ptr: *mut Flash,
+}
+unsafe impl Send for FlashPtr {}
+
 pub trait Flash {
     fn erase(&mut self, offset: usize, len: usize) -> Result<()>;
     fn write(&mut self, offset: usize, payload: &[u8]) -> Result<()>;
@@ -46,6 +52,7 @@ pub trait Flash {
     fn sector_iter(&self) -> SectorIter;
     fn device_size(&self) -> usize;
 
+    fn align(&self) -> usize;
     fn erased_val(&self) -> u8;
 }
 
@@ -123,6 +130,8 @@ impl SimFlash {
     }
 
 }
+
+pub type SimFlashMap = HashMap<u8, SimFlash>;
 
 impl Flash for SimFlash {
     /// The flash drivers tend to erase beyond the bounds of the given range.  Instead, we'll be
@@ -237,6 +246,10 @@ impl Flash for SimFlash {
 
     fn device_size(&self) -> usize {
         self.data.len()
+    }
+
+    fn align(&self) -> usize {
+        self.align
     }
 
     fn erased_val(&self) -> u8 {

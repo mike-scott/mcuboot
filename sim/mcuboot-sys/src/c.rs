@@ -1,7 +1,7 @@
 /// Interface wrappers to C API entering to the bootloader
 
 use area::AreaDesc;
-use simflash::Flash;
+use simflash::SimFlashMap;
 use libc;
 use api;
 use std::sync::Mutex;
@@ -13,16 +13,16 @@ lazy_static! {
 }
 
 /// Invoke the bootloader on this flash device.
-pub fn boot_go(flash: &mut Flash, areadesc: &AreaDesc, counter: Option<&mut i32>,
-               align: u8, catch_asserts: bool) -> (i32, u8) {
+pub fn boot_go(flashmap: &mut SimFlashMap, areadesc: &AreaDesc,
+               counter: Option<&mut i32>, catch_asserts: bool) -> (i32, u8) {
     let _lock = BOOT_LOCK.lock().unwrap();
 
     unsafe {
-        api::set_flash(flash);
+        for (&dev_id, flash) in flashmap.iter_mut() {
+            api::set_flash(dev_id, flash);
+        }
         raw::c_catch_asserts = if catch_asserts { 1 } else { 0 };
         raw::c_asserts = 0u8;
-        raw::sim_flash_align = align;
-        raw::sim_flash_erased_val = flash.erased_val();
         raw::flash_counter = match counter {
             None => 0,
             Some(ref c) => **c as libc::c_int
@@ -32,7 +32,9 @@ pub fn boot_go(flash: &mut Flash, areadesc: &AreaDesc, counter: Option<&mut i32>
     let asserts = unsafe { raw::c_asserts };
     unsafe {
         counter.map(|c| *c = raw::flash_counter as i32);
-        api::clear_flash();
+        for (&dev_id, _) in flashmap {
+            api::clear_flash(dev_id);
+        }
     };
     (result, asserts)
 }
@@ -95,8 +97,6 @@ mod raw {
         pub static mut c_asserts: u8;
         pub static mut c_catch_asserts: u8;
 
-        pub static mut sim_flash_align: u8;
-        pub static mut sim_flash_erased_val: u8;
         pub fn boot_slots_trailer_sz(min_write_sz: u8) -> u32;
 
         pub static BOOT_MAGIC_SZ: u32;

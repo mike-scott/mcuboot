@@ -316,7 +316,7 @@ boot_write_sz(void)
      * We need to use the bigger of those 2 values.
      */
     elem_sz = flash_area_align(boot_data.imgs[0].area);
-    align = flash_area_align(boot_data.scratch_area);
+    align = flash_area_align(boot_data.scratch.area);
     if (align > elem_sz) {
         elem_sz = align;
     }
@@ -324,32 +324,84 @@ boot_write_sz(void)
     return elem_sz;
 }
 
+/*
+ * Slots are compatible when all sectors that store upto to size of the image
+ * round up to sector size, in both slot's are able to fit in the scratch
+ * area, and have sizes that are a multiple of each other (powers of two
+ * presumably!).
+ */
 static int
 boot_slots_compatible(void)
 {
-    size_t num_sectors_0 = boot_img_num_sectors(&boot_data, 0);
-    size_t num_sectors_1 = boot_img_num_sectors(&boot_data, 1);
-    size_t size_0, size_1;
-    size_t i;
+    size_t num_sectors_0;
+    size_t num_sectors_1;
+    size_t sz0, sz1;
+    size_t slot0_sz, slot1_sz;
+    size_t scratch_sz;
+    size_t i, j;
+    int8_t smaller;
 
+    num_sectors_0 = boot_img_num_sectors(&boot_data, 0);
+    num_sectors_1 = boot_img_num_sectors(&boot_data, 1);
     if (num_sectors_0 > BOOT_MAX_IMG_SECTORS || num_sectors_1 > BOOT_MAX_IMG_SECTORS) {
         BOOT_LOG_WRN("Cannot upgrade: more sectors than allowed");
         return 0;
     }
 
-    /* Ensure both image slots have identical sector layouts. */
-    if (num_sectors_0 != num_sectors_1) {
-        BOOT_LOG_WRN("Cannot upgrade: number of sectors differ between slots");
-        return 0;
+    scratch_sz = boot_scratch_area_size(&boot_data);
+
+    /*
+     * The following loop scans all sectors in a linear fashion, assuring that
+     * for each possible sector in each slot, it is able to fit in the other
+     * slot's sector or sectors. Slot's should be compatible as long as any
+     * number of a slot's sectors are able to fit into another, which only
+     * excludes cases where sector sizes are not a multiple of each other.
+     */
+    i = sz0 = slot0_sz = 0;
+    j = sz1 = slot1_sz = 0;
+    smaller = 0;
+    while (i < num_sectors_0 || j < num_sectors_1) {
+        if (sz0 == sz1) {
+            sz0 += boot_img_sector_size(&boot_data, 0, i);
+            sz1 += boot_img_sector_size(&boot_data, 1, j);
+            i++;
+            j++;
+        } else if (sz0 < sz1) {
+            sz0 += boot_img_sector_size(&boot_data, 0, i);
+            /* guarantee that multiple sectors of slot1 fit into slot0 */
+            if (smaller == 2) {
+                BOOT_LOG_WRN("Cannot upgrade: slots have non-compatible sectors");
+                return 0;
+            }
+            smaller = 1;
+            i++;
+        } else {
+            sz1 += boot_img_sector_size(&boot_data, 1, j);
+            /* guarantee that multiple sectors of slot0 fit into slot1 */
+            if (smaller == 1) {
+                BOOT_LOG_WRN("Cannot upgrade: slots have non-compatible sectors");
+                return 0;
+            }
+            smaller = 2;
+            j++;
+        }
+        if (sz0 == sz1) {
+            slot0_sz += sz0;
+            slot1_sz += sz1;
+            /* scratch has to fit each swap operation to the size of the larger
+             * sector among slot0 and slot1
+             */
+            if (sz0 > scratch_sz || sz1 > scratch_sz) {
+                BOOT_LOG_WRN("Cannot upgrade: not all sectors fit inside scratch");
+                return 0;
+            }
+            smaller = sz0 = sz1 = 0;
+        }
     }
 
-    for (i = 0; i < num_sectors_0; i++) {
-        size_0 = boot_img_sector_size(&boot_data, 0, i);
-        size_1 = boot_img_sector_size(&boot_data, 1, i);
-        if (size_0 != size_1) {
-            BOOT_LOG_WRN("Cannot upgrade: an incompatible sector was found");
-            return 0;
-        }
+    if (i != num_sectors_0 || j != num_sectors_1 || slot0_sz != slot1_sz) {
+        BOOT_LOG_WRN("Cannot upgrade: slots are not compatible");
+        return 0;
     }
 
     return 1;
@@ -372,6 +424,11 @@ boot_read_sectors(void)
     }
 
     rc = boot_initialize_area(&boot_data, FLASH_AREA_IMAGE_1);
+    if (rc != 0) {
+        return BOOT_EFLASH;
+    }
+
+    rc = boot_initialize_area(&boot_data, FLASH_AREA_IMAGE_SCRATCH);
     if (rc != 0) {
         return BOOT_EFLASH;
     }
@@ -586,7 +643,7 @@ boot_image_check(struct image_header *hdr, const struct flash_area *fap,
     (void)bs;
     (void)rc;
 #else
-    if (fap->fa_id == FLASH_AREA_IMAGE_1 && hdr->ih_flags & IMAGE_F_ENCRYPTED) {
+    if (fap->fa_id == FLASH_AREA_IMAGE_1 && IS_ENCRYPTED(hdr)) {
         rc = boot_enc_load(hdr, fap, bs->enckey[1]);
         if (rc < 0) {
             return BOOT_EBADIMAGE;
@@ -633,16 +690,44 @@ split_image_check(struct image_header *app_hdr,
     return 0;
 }
 
-static inline int
-boot_magic_is_erased(uint8_t erased_val, uint32_t magic)
+/*
+ * Check that a memory area consists of a given value.
+ */
+static inline bool
+boot_data_is_set_to(uint8_t val, void *data, size_t len)
 {
     uint8_t i;
-    for (i = 0; i < sizeof(magic); i++) {
-        if (erased_val != *(((uint8_t *)&magic) + i)) {
-            return 0;
+    uint8_t *p = (uint8_t *)data;
+    for (i = 0; i < len; i++) {
+        if (val != p[i]) {
+            return false;
         }
     }
-    return 1;
+    return true;
+}
+
+static int
+boot_check_header_erased(int slot)
+{
+    const struct flash_area *fap;
+    struct image_header *hdr;
+    uint8_t erased_val;
+    int rc;
+
+    rc = flash_area_open(flash_area_id_from_image_slot(slot), &fap);
+    if (rc != 0) {
+        return -1;
+    }
+
+    erased_val = flash_area_erased_val(fap);
+    flash_area_close(fap);
+
+    hdr = boot_img_hdr(&boot_data, slot);
+    if (!boot_data_is_set_to(erased_val, &hdr->ih_magic, sizeof(hdr->ih_magic))) {
+        return -1;
+    }
+
+    return 0;
 }
 
 static int
@@ -658,10 +743,10 @@ boot_validate_slot(int slot, struct boot_status *bs)
     }
 
     hdr = boot_img_hdr(&boot_data, slot);
-    if (boot_magic_is_erased(flash_area_erased_val(fap), hdr->ih_magic) ||
-            hdr->ih_flags & IMAGE_F_NON_BOOTABLE) {
+    if (boot_check_header_erased(slot) == 0 || (hdr->ih_flags & IMAGE_F_NON_BOOTABLE)) {
         /* No bootable image in slot; continue booting from slot 0. */
-        return -1;
+        rc = -1;
+        goto out;
     }
 
     if ((hdr->ih_magic != IMAGE_MAGIC || boot_image_check(hdr, fap, bs) != 0)) {
@@ -672,13 +757,16 @@ boot_validate_slot(int slot, struct boot_status *bs)
              */
         }
         BOOT_LOG_ERR("Image in slot %d is not valid!", slot);
-        return -1;
+        rc = -1;
+        goto out;
     }
 
-    flash_area_close(fap);
-
     /* Image in slot 1 is valid. */
-    return 0;
+    rc = 0;
+
+out:
+    flash_area_close(fap);
+    return rc;
 }
 
 /**
@@ -735,6 +823,11 @@ boot_copy_sz(int last_sector_idx, int *out_first_sector_idx)
     scratch_sz = boot_scratch_area_size(&boot_data);
     for (i = last_sector_idx; i >= 0; i--) {
         new_sz = sz + boot_img_sector_size(&boot_data, 0, i);
+        /*
+         * slot1 is not being checked here, because `boot_slots_compatible`
+         * already provides assurance that the copy size will be compatible
+         * with slot0 and scratch.
+         */
         if (new_sz > scratch_sz) {
             break;
         }
@@ -821,7 +914,7 @@ boot_copy_sector(const struct flash_area *fap_src,
                 hdr = boot_img_hdr(&boot_data, 0);
                 off = off_dst;
             }
-            if (hdr->ih_flags & IMAGE_F_ENCRYPTED) {
+            if (IS_ENCRYPTED(hdr)) {
                 blk_sz = chunk_sz;
                 idx = 0;
                 if (off + bytes_copied < hdr->ih_hdr_size) {
@@ -951,8 +1044,8 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_status *bs)
     copy_sz = sz;
     trailer_sz = boot_slots_trailer_sz(BOOT_WRITE_SZ(&boot_data));
 
-    /* sz in this function is always is always sized on a multiple of the
-     * sector size. The check against the start offset of the last sector
+    /* sz in this function is always sized on a multiple of the sector size.
+     * The check against the start offset of the last sector
      * is to determine if we're swapping the last sector. The last sector
      * needs special handling because it's where the trailer lives. If we're
      * copying it, we need to use scratch to write the trailer temporarily.
@@ -1090,7 +1183,7 @@ boot_swap_sectors(int idx, uint32_t sz, struct boot_status *bs)
  *
  * @return                      0 on success; nonzero on failure.
  */
-#ifdef MCUBOOT_OVERWRITE_ONLY
+#if defined(MCUBOOT_OVERWRITE_ONLY) || defined(MCUBOOT_BOOTSTRAP)
 static int
 boot_copy_image(struct boot_status *bs)
 {
@@ -1136,7 +1229,7 @@ boot_copy_image(struct boot_status *bs)
     }
 
 #ifdef MCUBOOT_ENC_IMAGES
-    if (boot_img_hdr(&boot_data, 1)->ih_flags & IMAGE_F_ENCRYPTED) {
+    if (IS_ENCRYPTED(boot_img_hdr(&boot_data, 1))) {
         rc = boot_enc_load(boot_img_hdr(&boot_data, 1), fap_slot1, bs->enckey[1]);
         if (rc < 0) {
             return BOOT_EBADIMAGE;
@@ -1147,7 +1240,7 @@ boot_copy_image(struct boot_status *bs)
     }
 #endif
 
-    BOOT_LOG_INF("Copying slot 1 to slot 0: 0x%lx bytes", size);
+    BOOT_LOG_INF("Copying slot 1 to slot 0: 0x%zx bytes", size);
     rc = boot_copy_sector(fap_slot1, fap_slot0, 0, 0, size);
 
     /*
@@ -1172,8 +1265,7 @@ boot_copy_image(struct boot_status *bs)
 
     return 0;
 }
-
-#else
+#endif
 
 /**
  * Swaps the two images in flash.  If a prior copy operation was interrupted
@@ -1187,12 +1279,14 @@ boot_copy_image(struct boot_status *bs)
  *
  * @return                      0 on success; nonzero on failure.
  */
+#if !defined(MCUBOOT_OVERWRITE_ONLY)
 static int
-boot_copy_image(struct boot_status *bs)
+boot_swap_image(struct boot_status *bs)
 {
     uint32_t sz;
     int first_sector_idx;
     int last_sector_idx;
+    int last_idx_slot1;
     uint32_t swap_idx;
     struct image_header *hdr;
 #ifdef MCUBOOT_ENC_IMAGES
@@ -1202,6 +1296,8 @@ boot_copy_image(struct boot_status *bs)
 #endif
     uint32_t size;
     uint32_t copy_size;
+    uint32_t slot0_size;
+    uint32_t slot1_size;
     int rc;
 
     /* FIXME: just do this if asked by user? */
@@ -1220,7 +1316,7 @@ boot_copy_image(struct boot_status *bs)
         }
 
 #ifdef MCUBOOT_ENC_IMAGES
-        if (hdr->ih_flags & IMAGE_F_ENCRYPTED) {
+        if (IS_ENCRYPTED(hdr)) {
             fap = BOOT_IMG_AREA(&boot_data, 0);
             rc = boot_enc_load(hdr, fap, bs->enckey[0]);
             assert(rc >= 0);
@@ -1244,7 +1340,7 @@ boot_copy_image(struct boot_status *bs)
 
 #ifdef MCUBOOT_ENC_IMAGES
         hdr = boot_img_hdr(&boot_data, 1);
-        if (hdr->ih_flags & IMAGE_F_ENCRYPTED) {
+        if (IS_ENCRYPTED(hdr)) {
             fap = BOOT_IMG_AREA(&boot_data, 1);
             rc = boot_enc_load(hdr, fap, bs->enckey[1]);
             assert(rc >= 0);
@@ -1294,14 +1390,31 @@ boot_copy_image(struct boot_status *bs)
 #endif
     }
 
-    size = 0;
+    slot0_size = 0;
+    slot1_size = 0;
     last_sector_idx = 0;
+    last_idx_slot1 = 0;
+
+    /*
+     * Knowing the size of the largest image between both slots, here we
+     * find what is the last sector in slot0 that needs swapping. Since we
+     * already know that both slots are compatible, slot1's last sector is
+     * not really required after this check is finished.
+     */
     while (1) {
-        size += boot_img_sector_size(&boot_data, 0, last_sector_idx);
-        if (size >= copy_size) {
+        if (slot0_size < copy_size || slot0_size < slot1_size) {
+            slot0_size += boot_img_sector_size(&boot_data, 0, last_sector_idx);
+        }
+        if (slot1_size < copy_size || slot1_size < slot0_size) {
+            slot1_size += boot_img_sector_size(&boot_data, 1, last_idx_slot1);
+        }
+        if (slot0_size >= copy_size &&
+                slot1_size >= copy_size &&
+                slot0_size == slot1_size) {
             break;
         }
         last_sector_idx++;
+        last_idx_slot1++;
     }
 
     swap_idx = 0;
@@ -1410,7 +1523,12 @@ boot_swap_if_needed(int *out_swap_type)
 
     /* If a partial swap was detected, complete it. */
     if (bs.idx != BOOT_STATUS_IDX_0 || bs.state != BOOT_STATUS_STATE_0) {
-        rc = boot_copy_image(&bs);
+#if MCUBOOT_OVERWRITE_ONLY
+        /* Should never arrive here, overwrite-only mode has no swap state. */
+        assert(0);
+#else
+        rc = boot_swap_image(&bs);
+#endif
         assert(rc == 0);
 
         /* NOTE: here we have finished a swap resume. The initial request
@@ -1429,9 +1547,34 @@ boot_swap_if_needed(int *out_swap_type)
         case BOOT_SWAP_TYPE_TEST:
         case BOOT_SWAP_TYPE_PERM:
         case BOOT_SWAP_TYPE_REVERT:
+#if MCUBOOT_OVERWRITE_ONLY
             rc = boot_copy_image(&bs);
+#else
+            rc = boot_swap_image(&bs);
+#endif
             assert(rc == 0);
             break;
+#ifdef MCUBOOT_BOOTSTRAP
+        case BOOT_SWAP_TYPE_NONE:
+            /*
+             * Header checks are done first because they are inexpensive.
+             * Since overwrite-only copies starting from offset 0, if
+             * interrupted, it might leave a valid header magic, so also
+             * run validation on slot0 to be sure it's not OK.
+             */
+            if (boot_check_header_erased(0) == 0 ||
+                    boot_validate_slot(0, &bs) != 0) {
+                if (boot_img_hdr(&boot_data, 1)->ih_magic == IMAGE_MAGIC &&
+                        boot_validate_slot(1, &bs) == 0) {
+                    rc = boot_copy_image(&bs);
+                    assert(rc == 0);
+
+                    /* Returns fail here to trigger a re-read of the headers. */
+                    swap_type = BOOT_SWAP_TYPE_FAIL;
+                }
+            }
+            break;
+#endif
         }
     }
 
@@ -1463,8 +1606,10 @@ boot_go(struct boot_rsp *rsp)
      */
     static boot_sector_t slot0_sectors[BOOT_MAX_IMG_SECTORS];
     static boot_sector_t slot1_sectors[BOOT_MAX_IMG_SECTORS];
+    static boot_sector_t scratch_sectors[BOOT_MAX_IMG_SECTORS];
     boot_data.imgs[0].sectors = slot0_sectors;
     boot_data.imgs[1].sectors = slot1_sectors;
+    boot_data.scratch.sectors = scratch_sectors;
 
 #ifdef MCUBOOT_ENC_IMAGES
     /* FIXME: remove this after RAM is cleared by sim */

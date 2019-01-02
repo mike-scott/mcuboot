@@ -22,6 +22,10 @@
 
 #include <inttypes.h>
 
+#ifdef __ZEPHYR__
+#include <toolchain/gcc.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -103,8 +107,15 @@ struct image_tlv {
     uint16_t it_len;    /* Data length (not including TLV header). */
 };
 
+#define IS_ENCRYPTED(hdr) ((hdr)->ih_flags & IMAGE_F_ENCRYPTED)
+
+#ifdef __ZEPHYR__
+BUILD_ASSERT_MSG(sizeof(struct image_header) == IMAGE_HEADER_SIZE,
+               "struct image_header not required size");
+#else
 _Static_assert(sizeof(struct image_header) == IMAGE_HEADER_SIZE,
                "struct image_header not required size");
+#endif
 
 int bootutil_img_validate(struct image_header *hdr,
                           const struct flash_area *fap,

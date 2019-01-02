@@ -1,6 +1,6 @@
 // Build mcuboot as a library, based on the requested features.
 
-extern crate gcc;
+extern crate cc;
 
 use std::env;
 use std::fs;
@@ -15,12 +15,18 @@ fn main() {
     let validate_slot0 = env::var("CARGO_FEATURE_VALIDATE_SLOT0").is_ok();
     let enc_rsa = env::var("CARGO_FEATURE_ENC_RSA").is_ok();
     let enc_kw = env::var("CARGO_FEATURE_ENC_KW").is_ok();
+    let bootstrap = env::var("CARGO_FEATURE_BOOTSTRAP").is_ok();
 
-    let mut conf = gcc::Build::new();
+    let mut conf = cc::Build::new();
     conf.define("__BOOTSIM__", None);
+    conf.define("MCUBOOT_HAVE_LOGGING", None);
     conf.define("MCUBOOT_USE_FLASH_AREA_GET_SECTORS", None);
     conf.define("MCUBOOT_HAVE_ASSERT_H", None);
     conf.define("MCUBOOT_MAX_IMG_SECTORS", Some("128"));
+
+    if bootstrap {
+        conf.define("MCUBOOT_BOOTSTRAP", None);
+    }
 
     if validate_slot0 {
         conf.define("MCUBOOT_VALIDATE_SLOT0", None);
@@ -35,7 +41,6 @@ fn main() {
         conf.define("MCUBOOT_SIGN_RSA", None);
         conf.define("MCUBOOT_USE_MBED_TLS", None);
 
-        conf.define("MBEDTLS_CONFIG_FILE", Some("<config-rsa.h>"));
         conf.include("mbedtls/include");
         conf.file("mbedtls/library/sha256.c");
         conf.file("csupport/keys.c");
@@ -49,7 +54,6 @@ fn main() {
         conf.define("MCUBOOT_SIGN_EC256", None);
         conf.define("MCUBOOT_USE_TINYCRYPT", None);
 
-        conf.define("MBEDTLS_CONFIG_FILE", Some("<config-asn1.h>"));
         conf.include("../../ext/mbedtls/include");
         conf.include("../../ext/tinycrypt/lib/include");
 
@@ -79,7 +83,6 @@ fn main() {
         conf.define("MCUBOOT_ENCRYPT_RSA", None);
         conf.define("MCUBOOT_ENC_IMAGES", None);
         conf.define("MCUBOOT_USE_MBED_TLS", None);
-        conf.define("MBEDTLS_CONFIG_FILE", Some("<config-rsa.h>"));
 
         conf.file("../../boot/bootutil/src/encrypted.c");
         conf.file("csupport/keys.c");
@@ -102,7 +105,6 @@ fn main() {
         conf.define("MCUBOOT_ENCRYPT_KW", None);
         conf.define("MCUBOOT_ENC_IMAGES", None);
         conf.define("MCUBOOT_USE_MBED_TLS", None);
-        conf.define("MBEDTLS_CONFIG_FILE", Some("<config-kw.h>"));
 
         conf.file("../../boot/bootutil/src/encrypted.c");
         conf.file("csupport/keys.c");
@@ -116,6 +118,16 @@ fn main() {
         conf.file("mbedtls/library/cipher.c");
         conf.file("mbedtls/library/cipher_wrap.c");
         conf.file("mbedtls/library/aes.c");
+    }
+
+    if sig_rsa && enc_kw {
+        conf.define("MBEDTLS_CONFIG_FILE", Some("<config-rsa-kw.h>"));
+    } else if sig_rsa || enc_rsa {
+        conf.define("MBEDTLS_CONFIG_FILE", Some("<config-rsa.h>"));
+    } else if sig_ecdsa {
+        conf.define("MBEDTLS_CONFIG_FILE", Some("<config-asn1.h>"));
+    } else if enc_kw {
+        conf.define("MBEDTLS_CONFIG_FILE", Some("<config-kw.h>"));
     }
 
     conf.file("../../boot/bootutil/src/image_validate.c");
